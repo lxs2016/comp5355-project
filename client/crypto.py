@@ -6,16 +6,19 @@ from scratch.
 
 Phase 1: key generation.
 Phase 2: X3DH session establishment (x3dh_initiate, x3dh_respond).
-Phase 3 will add: encrypt_message, decrypt_message.
+Phase 3: message encryption / decryption (XChaCha20-Poly1305 AEAD).
 """
 
 import base64
 import hashlib
+import json
 import uuid
 
+import nacl.bindings
 import nacl.exceptions
 import nacl.public
 import nacl.signing
+import nacl.utils
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
@@ -226,3 +229,56 @@ def x3dh_respond(bob_identity: dict, alice_bundle: dict, handshake: dict) -> byt
     DH2 = _raw_dh(bob_SPK_priv, EK_pub_bytes)       # Bob.SPK.priv   ↔ EK.pub
     DH3 = _raw_dh(bob_SPK_priv, alice_IK_dh_pub)    # Bob.SPK.priv   ↔ Alice.IK_dh.pub
     return _hkdf(DH1 + DH2 + DH3)
+
+
+# ---------------------------------------------------------------------------
+# Message encryption / decryption  (Phase 3 — FR-3, SR1, SR2, SR4)
+# ---------------------------------------------------------------------------
+
+# XChaCha20-Poly1305 nonce length (libsodium / PyNaCl)
+XCHACHA20_NONCE_SIZE = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES  # 24
+
+
+def encrypt_message(SK: bytes, plaintext: str, ad_dict: dict) -> tuple[str, str]:
+    """Encrypt *plaintext* under *SK* using XChaCha20-Poly1305 AEAD.
+
+    The associated data *ad_dict* (serialised deterministically with
+    sort_keys=True) is authenticated but not encrypted.  It binds the
+    session_id, sender, recipient, and seq to the ciphertext, preventing
+    cross-session replay and message-transplant attacks.
+
+    Returns (ciphertext_b64, ad_json) where:
+        ciphertext_b64 = base64(random_nonce_24B || encrypted_bytes_with_tag)
+        ad_json        = canonical JSON string of ad_dict
+    """
+    nonce = nacl.utils.random(XCHACHA20_NONCE_SIZE)
+    ad_json = json.dumps(ad_dict, sort_keys=True)
+    ad_bytes = ad_json.encode()
+    encrypted = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
+        message=plaintext.encode(),
+        aad=ad_bytes,
+        nonce=nonce,
+        key=SK,
+    )
+    return b64(nonce + encrypted), ad_json
+
+
+def decrypt_message(SK: bytes, ciphertext_b64: str, ad_json: str) -> str:
+    """Decrypt and authenticate a ciphertext produced by *encrypt_message*.
+
+    Raises ValueError if the AEAD tag does not verify (tampering, wrong key,
+    or wrong associated data — covers SR1, SR2).
+    """
+    raw = from_b64(ciphertext_b64)
+    nonce = raw[:XCHACHA20_NONCE_SIZE]
+    encrypted = raw[XCHACHA20_NONCE_SIZE:]
+    try:
+        plaintext_bytes = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
+            ciphertext=encrypted,
+            aad=ad_json.encode(),
+            nonce=nonce,
+            key=SK,
+        )
+        return plaintext_bytes.decode()
+    except nacl.exceptions.CryptoError as exc:
+        raise ValueError(f"AEAD authentication failed: {exc}") from exc

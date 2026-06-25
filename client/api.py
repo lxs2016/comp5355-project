@@ -136,3 +136,44 @@ def ack_handshake(server_url: str, token: str, session_id: str) -> dict:
     )
     r.raise_for_status()
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — messaging
+# ---------------------------------------------------------------------------
+
+def post_message(
+    server_url: str,
+    token: str,
+    session_id: str,
+    to: str,
+    ciphertext: str,
+    seq: int,
+    ad: str,
+) -> dict:
+    """Upload an encrypted message to the relay server for delivery."""
+    r = httpx.post(
+        _url(server_url, "/message"),
+        json={
+            "session_id": session_id,
+            "to": to,
+            "ciphertext": ciphertext,
+            "seq": seq,
+            "ad": ad,
+        },
+        headers=_auth_headers(token),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def get_messages(server_url: str, token: str) -> list[dict]:
+    """Fetch and consume all undelivered messages for the authenticated user."""
+    r = httpx.get(
+        _url(server_url, "/messages"),
+        headers=_auth_headers(token),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()["messages"]

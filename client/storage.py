@@ -121,3 +121,18 @@ def load_session(username: str, peer: str, session_id: str) -> dict:
 def list_sessions(username: str) -> list[str]:
     """Return a list of '<peer>_<session_id>' stem names."""
     return [p.stem for p in sessions_dir(username).glob("*.json")]
+
+
+def find_latest_session(username: str, peer: str) -> dict | None:
+    """Return the most recently established session with *peer*, or None.
+
+    When multiple sessions exist for the same peer, the one with the largest
+    `established_at` timestamp is returned.
+    """
+    candidates = [
+        json.loads(p.read_text())
+        for p in sessions_dir(username).glob(f"{peer}_*.json")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.get("established_at", 0))

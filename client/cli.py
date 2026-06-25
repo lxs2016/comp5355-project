@@ -26,6 +26,8 @@ from client.crypto import generate_identity_keys
 from client.protocol import (
     establish_session_as_initiator,
     establish_session_as_responder,
+    receive_messages,
+    send_message,
 )
 
 DEFAULT_SERVER = os.environ.get("E2EE_SERVER", "http://localhost:8000")
@@ -184,6 +186,50 @@ def cmd_listen(args: argparse.Namespace) -> None:
             _ok(f"Session {sid} established")
 
 
+def cmd_send(args: argparse.Namespace) -> None:
+    """Encrypt and send a message to a peer (Phase 3)."""
+    try:
+        result = send_message(args.user, args.to, args.msg)
+    except FileNotFoundError as e:
+        _err(str(e))
+        sys.exit(1)
+    except httpx.HTTPStatusError as e:
+        _err(f"Server error: {_http_error_detail(e)}")
+        sys.exit(1)
+    except httpx.RequestError as e:
+        _err(f"Cannot reach server: {e}")
+        sys.exit(1)
+
+    _ok(
+        f"Encrypted (seq={result['seq']}), "
+        f"ciphertext: {result['ciphertext'][:48]}…"
+    )
+
+
+def cmd_recv(args: argparse.Namespace) -> None:
+    """Fetch and decrypt all pending messages (Phase 3)."""
+    try:
+        messages = receive_messages(args.user)
+    except FileNotFoundError as e:
+        _err(str(e))
+        sys.exit(1)
+    except ValueError as e:
+        print(f"[REJECT] {e}", file=sys.stderr)
+        sys.exit(1)
+    except httpx.HTTPStatusError as e:
+        _err(f"Server error: {_http_error_detail(e)}")
+        sys.exit(1)
+    except httpx.RequestError as e:
+        _err(f"Cannot reach server: {e}")
+        sys.exit(1)
+
+    if not messages:
+        print("[INFO] No new messages.")
+    else:
+        for m in messages:
+            print(f"[{m['sender']}] {m['plaintext']}")
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -224,6 +270,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_listen.add_argument("--user", required=True, help="Your username")
     p_listen.add_argument("--debug", action="store_true", help="Print session key for verification")
 
+    # send  (Phase 3 — send encrypted message)
+    p_send = sub.add_parser("send", help="Send an encrypted message to a peer")
+    p_send.add_argument("--user", required=True, help="Your username")
+    p_send.add_argument("--to", required=True, help="Recipient username")
+    p_send.add_argument("--msg", required=True, help="Plaintext message to send")
+
+    # recv  (Phase 3 — receive and decrypt messages)
+    p_recv = sub.add_parser("recv", help="Fetch and decrypt pending messages")
+    p_recv.add_argument("--user", required=True, help="Your username")
+
     return parser
 
 
@@ -237,6 +293,8 @@ def main() -> None:
         "keys": cmd_keys,
         "connect": cmd_connect,
         "listen": cmd_listen,
+        "send": cmd_send,
+        "recv": cmd_recv,
     }
     dispatch[args.command](args)
 

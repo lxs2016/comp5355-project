@@ -72,3 +72,31 @@ class PendingHandshake(BaseModel):
 
 class HandshakeStatusResponse(BaseModel):
     status: str  # "pending" | "established"
+
+
+# ---------------------------------------------------------------------------
+# Messages  (Phase 3)
+# ---------------------------------------------------------------------------
+
+class MessageRequest(BaseModel):
+    session_id: str
+    to: str
+    ciphertext: str  # base64(nonce_24B || xchacha20poly1305_ciphertext_with_tag)
+    seq: int         # monotonically increasing per-session sequence number
+    ad: str          # canonical JSON string of associated data (authenticated, not encrypted)
+
+
+class MessageResponse(BaseModel):
+    ok: bool
+
+
+class InboxMessage(BaseModel):
+    session_id: str
+    sender: str
+    ciphertext: str
+    seq: int
+    ad: str
+
+
+class InboxResponse(BaseModel):
+    messages: list[InboxMessage]

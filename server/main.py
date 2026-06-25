@@ -10,9 +10,12 @@ from server.models import (
     HandshakeInitResponse,
     HandshakeStatusResponse,
     HealthResponse,
+    InboxResponse,
     KeyBundleResponse,
     LoginRequest,
     LoginResponse,
+    MessageRequest,
+    MessageResponse,
     PendingHandshake,
     RegisterRequest,
     RegisterResponse,
@@ -193,3 +196,74 @@ def ack_handshake(
             (session_id,),
         )
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Messages  (Phase 3)
+# ---------------------------------------------------------------------------
+
+@app.post("/message", response_model=MessageResponse)
+def post_message(
+    req: MessageRequest,
+    sender: str = Depends(bearer_token),
+):
+    """Store an encrypted message for delivery to the recipient.
+
+    The server only stores the ciphertext and associated data — it never
+    sees plaintext (SR1, A3: honest-but-curious server threat).
+    """
+    with get_conn() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM users WHERE username=?", (req.to,)
+        ).fetchone():
+            raise HTTPException(404, f"Recipient '{req.to}' not found")
+        conn.execute(
+            "INSERT INTO messages "
+            "(session_id, sender, recipient, ciphertext, seq, ad, delivered, created_at) "
+            "VALUES (?,?,?,?,?,?,0,?)",
+            (
+                req.session_id,
+                sender,
+                req.to,
+                req.ciphertext,
+                req.seq,
+                req.ad,
+                int(time.time()),
+            ),
+        )
+    return {"ok": True}
+
+
+@app.get("/messages", response_model=InboxResponse)
+def get_messages(recipient: str = Depends(bearer_token)):
+    """Return all undelivered messages for the authenticated user.
+
+    Messages are marked as delivered after this call, matching a simple
+    at-most-once delivery model suitable for the demo.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, session_id, sender, ciphertext, seq, ad "
+            "FROM messages WHERE recipient=? AND delivered=0 "
+            "ORDER BY id ASC",
+            (recipient,),
+        ).fetchall()
+        if rows:
+            ids = [r["id"] for r in rows]
+            placeholders = ",".join("?" * len(ids))
+            conn.execute(
+                f"UPDATE messages SET delivered=1 WHERE id IN ({placeholders})",
+                ids,
+            )
+    return {
+        "messages": [
+            {
+                "session_id": r["session_id"],
+                "sender": r["sender"],
+                "ciphertext": r["ciphertext"],
+                "seq": r["seq"],
+                "ad": r["ad"],
+            }
+            for r in rows
+        ]
+    }
