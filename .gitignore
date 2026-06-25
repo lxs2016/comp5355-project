@@ -2,6 +2,7 @@
 *.db
 *.db-wal
 *.db-shm
+*.key
 .env
 
 # Local key store
