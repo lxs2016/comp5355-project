@@ -70,3 +70,69 @@ def get_keys(server_url: str, peer: str, token: str) -> dict:
     )
     r.raise_for_status()
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — handshake
+# ---------------------------------------------------------------------------
+
+def post_handshake(
+    server_url: str,
+    token: str,
+    session_id: str,
+    to: str,
+    EK_pub: str,
+    hs_sig: str,
+    transcript_hash: str,
+) -> dict:
+    """Initiator submits a handshake envelope to the relay server."""
+    r = httpx.post(
+        _url(server_url, "/handshake"),
+        json={
+            "session_id": session_id,
+            "to": to,
+            "EK_pub": EK_pub,
+            "hs_sig": hs_sig,
+            "transcript_hash": transcript_hash,
+        },
+        headers=_auth_headers(token),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def get_pending_handshakes(server_url: str, token: str) -> list[dict]:
+    """Responder polls for handshakes addressed to the authenticated user."""
+    r = httpx.get(
+        _url(server_url, "/handshakes/pending"),
+        headers=_auth_headers(token),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def get_handshake_status(server_url: str, token: str, session_id: str) -> dict:
+    """Check whether a handshake has been acknowledged.
+
+    Returns {"status": "pending"} or {"status": "established"}.
+    """
+    r = httpx.get(
+        _url(server_url, f"/handshake/{session_id}"),
+        headers=_auth_headers(token),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def ack_handshake(server_url: str, token: str, session_id: str) -> dict:
+    """Responder acknowledges a handshake after deriving SK."""
+    r = httpx.post(
+        _url(server_url, f"/handshake/{session_id}/ack"),
+        headers=_auth_headers(token),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()

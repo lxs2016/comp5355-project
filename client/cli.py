@@ -2,14 +2,15 @@
 E2EE Messaging Client — command-line interface.
 
 Usage:
-    python client/cli.py register --user <name> --password <pw> [--server <url>]
-    python client/cli.py login    --user <name> --password <pw> [--server <url>]
-    python client/cli.py keys     --user <name> --peer <peer>   [--server <url>]
+    python -m client.cli register --user <name> --password <pw> [--server <url>]
+    python -m client.cli login    --user <name> --password <pw> [--server <url>]
+    python -m client.cli keys     --user <name> --peer <peer>   [--server <url>]
+    python -m client.cli connect  --user <name> --to <peer>     [--debug]
+    python -m client.cli listen   --user <name>                 [--debug]
 
 The --server flag defaults to the E2EE_SERVER environment variable, or
 http://localhost:8000 if that variable is not set.
 
-Phase 2 will add: connect, listen
 Phase 3 will add: send, recv, chat
 Phase 5 will add: safety-number
 """
@@ -22,6 +23,10 @@ import httpx
 
 from client import api, storage
 from client.crypto import generate_identity_keys
+from client.protocol import (
+    establish_session_as_initiator,
+    establish_session_as_responder,
+)
 
 DEFAULT_SERVER = os.environ.get("E2EE_SERVER", "http://localhost:8000")
 
@@ -120,6 +125,65 @@ def cmd_keys(args: argparse.Namespace) -> None:
     print(f"SPK_sig    : {bundle['SPK_sig']}")
 
 
+def cmd_connect(args: argparse.Namespace) -> None:
+    """Initiate an X3DH-lite session with a peer (Alice side)."""
+    try:
+        token = storage.load_token(args.user)  # noqa: F841 — ensure logged in
+    except FileNotFoundError as e:
+        _err(str(e))
+        sys.exit(1)
+
+    _ok(f"Fetching {args.to}'s key bundle …")
+    try:
+        session_id = establish_session_as_initiator(
+            args.user, args.to, debug=args.debug
+        )
+    except ValueError as e:
+        _err(str(e))
+        sys.exit(1)
+    except TimeoutError as e:
+        _err(str(e))
+        sys.exit(1)
+    except httpx.HTTPStatusError as e:
+        _err(f"Server error: {_http_error_detail(e)}")
+        sys.exit(1)
+    except httpx.RequestError as e:
+        _err(f"Cannot reach server: {e}")
+        sys.exit(1)
+
+    _ok("SPK signature verified (SR3)")
+    _ok(f"Session {session_id} established")
+    _ok("EK destroyed (forward secrecy, B1)")
+
+
+def cmd_listen(args: argparse.Namespace) -> None:
+    """Process pending incoming handshakes (Bob side)."""
+    try:
+        storage.load_token(args.user)  # ensure logged in
+    except FileNotFoundError as e:
+        _err(str(e))
+        sys.exit(1)
+
+    try:
+        sessions = establish_session_as_responder(args.user, debug=args.debug)
+    except ValueError as e:
+        _err(str(e))
+        sys.exit(1)
+    except httpx.HTTPStatusError as e:
+        _err(f"Server error: {_http_error_detail(e)}")
+        sys.exit(1)
+    except httpx.RequestError as e:
+        _err(f"Cannot reach server: {e}")
+        sys.exit(1)
+
+    if not sessions:
+        print("[INFO] No pending handshakes.")
+    else:
+        for sid in sessions:
+            _ok(f"Alice's signature verified (SR3)")
+            _ok(f"Session {sid} established")
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -149,6 +213,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_keys.add_argument("--peer", required=True, help="Target username to look up")
     p_keys.add_argument("--server", default=None, help="Relay server URL (default: from identity)")
 
+    # connect  (Phase 2 — initiator)
+    p_connect = sub.add_parser("connect", help="Initiate an E2EE session with a peer")
+    p_connect.add_argument("--user", required=True, help="Your username")
+    p_connect.add_argument("--to", required=True, help="Peer username to connect to")
+    p_connect.add_argument("--debug", action="store_true", help="Print session key for verification")
+
+    # listen  (Phase 2 — responder)
+    p_listen = sub.add_parser("listen", help="Accept pending incoming session handshakes")
+    p_listen.add_argument("--user", required=True, help="Your username")
+    p_listen.add_argument("--debug", action="store_true", help="Print session key for verification")
+
     return parser
 
 
@@ -160,6 +235,8 @@ def main() -> None:
         "register": cmd_register,
         "login": cmd_login,
         "keys": cmd_keys,
+        "connect": cmd_connect,
+        "listen": cmd_listen,
     }
     dispatch[args.command](args)
 
