@@ -11,8 +11,8 @@ Usage:
 The --server flag defaults to the E2EE_SERVER environment variable, or
 http://localhost:8000 if that variable is not set.
 
-Phase 3 will add: send, recv, chat
-Phase 5 will add: safety-number
+Phase 3: send, recv
+Phase 5: safety-number
 """
 
 import argparse
@@ -22,7 +22,7 @@ import sys
 import httpx
 
 from client import api, storage
-from client.crypto import generate_identity_keys
+from client.crypto import compute_safety_number, generate_identity_keys
 from client.protocol import (
     establish_session_as_initiator,
     establish_session_as_responder,
@@ -186,6 +186,34 @@ def cmd_listen(args: argparse.Namespace) -> None:
             _ok(f"Session {sid} established")
 
 
+def cmd_safety_number(args: argparse.Namespace) -> None:
+    """Compute and display the safety number for a peer pair (Phase 5)."""
+    try:
+        identity = storage.load_identity(args.user)
+        token = storage.load_token(args.user)
+    except FileNotFoundError as e:
+        _err(str(e))
+        sys.exit(1)
+
+    server_url = identity["server_url"]
+    my_IK_dh_pub = bytes(identity["IK_dh"].public_key)
+
+    try:
+        peer_bundle = api.get_keys(server_url, args.peer, token)
+    except httpx.HTTPStatusError as e:
+        _err(f"Key lookup failed: {_http_error_detail(e)}")
+        sys.exit(1)
+    except httpx.RequestError as e:
+        _err(f"Cannot reach server: {e}")
+        sys.exit(1)
+
+    from client.crypto import from_b64
+    peer_IK_dh_pub = from_b64(peer_bundle["IK_dh_pub"])
+
+    sn = compute_safety_number(my_IK_dh_pub, peer_IK_dh_pub)
+    print(f"Safety Number: {sn}")
+
+
 def cmd_send(args: argparse.Namespace) -> None:
     """Encrypt and send a message to a peer (Phase 3)."""
     try:
@@ -280,6 +308,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_recv = sub.add_parser("recv", help="Fetch and decrypt pending messages")
     p_recv.add_argument("--user", required=True, help="Your username")
 
+    # safety-number  (Phase 5 — Bonus B2 malicious server resistance)
+    p_sn = sub.add_parser(
+        "safety-number",
+        help="Display the safety number for out-of-band key verification",
+    )
+    p_sn.add_argument("--user", required=True, help="Your username")
+    p_sn.add_argument("--peer", required=True, help="Peer's username")
+
     return parser
 
 
@@ -295,6 +331,7 @@ def main() -> None:
         "listen": cmd_listen,
         "send": cmd_send,
         "recv": cmd_recv,
+        "safety-number": cmd_safety_number,
     }
     dispatch[args.command](args)
 

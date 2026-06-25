@@ -275,6 +275,24 @@ def encrypt_message(SK: bytes, plaintext: str, ad_dict: dict) -> tuple[str, str]
     return b64(nonce + encrypted), ad_json
 
 
+def compute_safety_number(my_IK_dh_pub: bytes, peer_IK_dh_pub: bytes) -> str:
+    """Compute a human-comparable safety number for an Alice-Bob key pair.
+
+    Both inputs are sorted lexicographically before hashing so the result is
+    identical regardless of which party calls this function.  The 256-bit
+    SHA-256 digest is reduced modulo 10^40 and formatted as 8 groups of 5
+    decimal digits (40 digits total), modelled on Signal's safety numbers.
+
+    Out-of-band comparison (phone call / in-person):
+      - Matching numbers → the relay server has not substituted either key.
+      - Differing numbers → possible malicious-server key-substitution (A5).
+    """
+    ordered = sorted([my_IK_dh_pub, peer_IK_dh_pub])
+    digest = hashlib.sha256(ordered[0] + ordered[1]).hexdigest()
+    n = int(digest, 16) % (10 ** 40)
+    return " ".join([f"{n // (10 ** (35 - 5 * i)) % 100000:05d}" for i in range(8)])
+
+
 def decrypt_message(SK: bytes, ciphertext_b64: str, ad_json: str) -> str:
     """Decrypt and authenticate a ciphertext produced by *encrypt_message*.
 
