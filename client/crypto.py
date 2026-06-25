@@ -12,6 +12,7 @@ Phase 3: message encryption / decryption (XChaCha20-Poly1305 AEAD).
 import base64
 import hashlib
 import json
+import os as _os
 import uuid
 
 import nacl.bindings
@@ -175,7 +176,18 @@ def x3dh_initiate(alice_identity: dict, bob_bundle: dict) -> dict:
 
     EK_pub_b64 = b64(EK_pub_bytes)
 
-    # Forward secrecy: remove all references to EK private material (B1)
+    # Forward secrecy: best-effort overwrite then delete EK private material (B1).
+    # Convert to a mutable bytearray so we can zero each byte before Python's
+    # garbage collector reclaims the memory.  CPython does not guarantee that
+    # del immediately frees the backing allocation, but the zero-fill is the
+    # strongest action available from pure Python without C extensions.
+    EK_priv_mutable = bytearray(EK_priv_bytes)
+    rand_fill = _os.urandom(len(EK_priv_mutable))
+    for i in range(len(EK_priv_mutable)):
+        EK_priv_mutable[i] = rand_fill[i]  # overwrite with random bytes first
+    for i in range(len(EK_priv_mutable)):
+        EK_priv_mutable[i] = 0             # then zero-fill
+    del EK_priv_mutable
     del EK
     del EK_priv_bytes
 
